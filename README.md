@@ -2,10 +2,15 @@
 
 This is a [Next.js](https://nextjs.org) project with Mapbox GL JS integration, bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
 
+- <span style="color: red">Please only work on the dev branch and feature branches.</span>
+- <span style="color: red">Refer to the [git-guidelines](documentation/git-guidelines.md) for more information.</span>
+- *Git Guidelines created by Isaiah Vickers AKA the GOAT*
+
 ## Features
 
 - Next.js 15 with App Router
 - Mapbox GL JS integration
+- Supabase integration
 - Tailwind CSS for styling
 - Dark mode support
 - Geist font family integration
@@ -48,6 +53,10 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 The following environment variables are required:
 
 - `NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN` - Your Mapbox access token (get one at https://account.mapbox.com/)
+- `NEXT_PUBLIC_SUPABASE_URL` - Your Supabase project URL
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY` - Your Supabase anonymous key
+
+*Request access to the Supabase project from Sun.*
 
 ## Learn More
 
@@ -55,6 +64,7 @@ To learn more about the technologies used in this project:
 
 - [Next.js Documentation](https://nextjs.org/docs)
 - [Mapbox GL JS Documentation](https://docs.mapbox.com/mapbox-gl-js/)
+- [Supabase Documentation](https://supabase.com/docs)
 - [Tailwind CSS Documentation](https://tailwindcss.com/docs)
 
 ## Deploy on Vercel
