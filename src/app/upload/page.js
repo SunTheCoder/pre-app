@@ -1,165 +1,194 @@
 "use client";
-import { useState } from 'react';
-import Image from 'next/image';
-import UploadModal from '@/components/UploadModal';
+import { useState, useRef } from "react";
+import UploadModal from "@/components/UploadModal";
 
+/**
+ * Example: Overlays bounding boxes on the recognized text, with a simple tooltip on hover.
+ */
 export default function UploadPage() {
-  const [modalOpen, setModalOpen] = useState(false);
-  const [uploadedFiles, setUploadedFiles] = useState([]);
+  const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [reportData, setReportData] = useState(null);
 
+  // Dimensions of the displayed image
+  const [imgSize, setImgSize] = useState({ width: 0, height: 0 });
+
+  // Which annotation is currently hovered
+  const [hoveredAnno, setHoveredAnno] = useState(null);
+
+  // Basic offset for the tooltip
+  const tooltipOffset = { x: 2, y: 0 };
+
   const handleUpload = async (files) => {
-    setUploadedFiles(files);
+    if (!files || files.length === 0) return;
     const file = files[0];
     const formData = new FormData();
-    formData.append('file', file);
+    formData.append("file", file);
 
     try {
-      const response = await fetch('/api/parse-upload', {
-        method: 'POST',
+      const response = await fetch("/api/parse-upload", {
+        method: "POST",
         body: formData,
       });
       const result = await response.json();
       if (response.ok) {
-        setReportData(result); // result now has finalSchema + parseResult
+        // store a local preview URL plus the result from the server
+        setReportData({
+          fileUrl: URL.createObjectURL(file),
+          ...result,
+        });
       } else {
         console.error(result.error);
-        alert('Error generating report: ' + result.error);
+        alert("Error generating report: " + result.error);
       }
     } catch (error) {
       console.error(error);
-      alert('An error occurred while processing the upload.');
+      alert("An error occurred while processing the upload.");
     }
-
-    setModalOpen(false);
+    setUploadModalOpen(false);
   };
 
-  function collapseSmallObjects(obj, indent = 2, depth = 0) {
-    // Handle non-objects or null
-    if (typeof obj !== 'object' || obj === null) {
-      return JSON.stringify(obj);
+  // Called when <img> finishes loading
+  const handleImageLoad = (e) => {
+    const width = e.currentTarget.offsetWidth;
+    const height = e.currentTarget.offsetHeight;
+    setImgSize({ width, height });
+  };
+
+  /**
+   * Convert raw bounding box coordinates to a CSS style object.
+   * The bounding box might have up to 4 vertices, e.g.:
+   * [
+   *   { x: 100, y: 50 },
+   *   { x: 200, y: 50 },
+   *   { x: 200, y: 80 },
+   *   { x: 100, y: 80 }
+   * ]
+   */
+  const getBoxStyle = (vertices) => {
+    if (!vertices || vertices.length === 0 || imgSize.width === 0) {
+      return { display: "none" };
     }
+    // Find minX, maxX, minY, maxY
+    let minX = Number.POSITIVE_INFINITY;
+    let maxX = 0;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxY = 0;
 
-    // If it's an array, handle each element
-    if (Array.isArray(obj)) {
-      if (obj.length === 0) return '[]';
+    vertices.forEach((v) => {
+      if (v.x < minX) minX = v.x;
+      if (v.x > maxX) maxX = v.x;
+      if (v.y < minY) minY = v.y;
+      if (v.y > maxY) maxY = v.y;
+    });
 
-      const arrayItems = obj.map(item => collapseSmallObjects(item, indent, depth + 1));
-      // Format each item on its own line if it's large, or inline if small
-      const multiline = arrayItems.some(str => str.includes('\n'));
-      if (!multiline && arrayItems.join(', ').length < 80) {
-        // If everything is small enough, inline the entire array
-        return `[ ${arrayItems.join(', ')} ]`;
-      } else {
-        // Otherwise, multiline
-        const space = ' '.repeat(indent * (depth + 1));
-        return `[\n${space}${arrayItems.join(`,\n${space}`)}\n${' '.repeat(indent * depth)}]`;
+    // Convert these to percentages
+    const boxLeft = (minX / imgSize.width) * 100;
+    const boxTop = (minY / imgSize.height) * 100;
+    const boxWidth = ((maxX - minX) / imgSize.width) * 100;
+    const boxHeight = ((maxY - minY) / imgSize.height) * 100;
+
+    return {
+      position: "absolute",
+      left: `${boxLeft}%`,
+      top: `${boxTop}%`,
+      width: `${boxWidth}%`,
+      height: `${boxHeight}%`,
+      border: "2px solid rgba(255,0,0,0.8)",
+      backgroundColor: "rgba(255,0,0,0.1)",
+      pointerEvents: "auto", // so we can hover
+    };
+  };
+
+  // Render the bounding boxes for each annotation
+  const renderAnnotations = () => {
+    if (!reportData?.personAnnotations || imgSize.width === 0) return null;
+
+    return reportData.personAnnotations.map((anno, idx) => {
+      const style = getBoxStyle(anno.vertices);
+      return (
+        <div
+          key={idx}
+          style={style}
+          onMouseEnter={() => setHoveredAnno(anno)}
+          onMouseLeave={() => setHoveredAnno(null)}
+        />
+      );
+    });
+  };
+
+  // Render a tooltip near the hovered box
+  const renderTooltip = () => {
+    if (!hoveredAnno || hoveredAnno.vertices.length === 0) return null;
+
+    // We'll position the tooltip at the top-left corner of the bounding box
+    // or we can pick minX, minY from the box calculations again
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    hoveredAnno.vertices.forEach((v) => {
+      if (v.x < minX) minX = v.x;
+      if (v.y < minY) minY = v.y;
+    });
+
+    // Convert to % for absolute positioning
+    const leftPct = (minX / imgSize.width) * 100 + tooltipOffset.x;
+    const topPct = (minY / imgSize.height) * 100 + tooltipOffset.y;
+
+    // For label: cross-reference the finalSchema people
+    let label = `Person #${hoveredAnno.person_id}`;
+    if (reportData?.finalSchema?.people) {
+      const found = reportData.finalSchema.people.find(
+        (p) => p.person_id === hoveredAnno.person_id
+      );
+      if (found) {
+        label = found.full_name;
       }
     }
 
-    // It's an object
-    const keys = Object.keys(obj);
-    if (keys.length === 0) return '{}';
-
-    // Check if all values are non-objects (so we can inline)
-    const allNonObjects = keys.every(k => {
-      const val = obj[k];
-      return (typeof val !== 'object' || val === null);
-    });
-
-    // If small object (<=4 keys) and all non-object values → inline
-    if (keys.length <= 4 && allNonObjects) {
-      // e.g. { a: 1, b: "x", c: null }
-      const inlineParts = keys.map(k => {
-        return JSON.stringify(k) + ': ' + JSON.stringify(obj[k]);
-      });
-      return `{ ${inlineParts.join(', ')} }`;
-    } else {
-      // Otherwise, multi-line
-      const space = ' '.repeat(indent * (depth + 1));
-      const props = keys.map((k, i) => {
-        const valueStr = collapseSmallObjects(obj[k], indent, depth + 1);
-        return `${JSON.stringify(k)}: ${valueStr}`;
-      });
-
-      return `{\n${space}${props.join(`,\n${space}`)}\n${' '.repeat(indent * depth)}}`;
-    }
-  }
-
+    return (
+      <div
+        className="absolute z-50 bg-black text-white text-xs p-2 rounded"
+        style={{
+          left: `${leftPct}%`,
+          top: `${topPct}%`,
+          transform: "translate(-0%, -0%)", // if you want to offset the tooltip differently, adjust
+          maxWidth: "200px",
+        }}
+      >
+        {label}
+      </div>
+    );
+  };
 
   return (
-    <div style={{ padding: '20px' }}>
-      <button onClick={() => setModalOpen(true)}>Upload Files</button>
-
+    <div className="p-5">
+      <button
+        onClick={() => setUploadModalOpen(true)}
+        className="btn btn-primary mb-5"
+      >
+        Upload Files
+      </button>
       <UploadModal
-        isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
+        isOpen={uploadModalOpen}
+        onClose={() => setUploadModalOpen(false)}
         onUpload={handleUpload}
       />
 
-      <h2>Preview:</h2>
-      <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
-        {uploadedFiles.map((file, index) => {
-          const fileURL = URL.createObjectURL(file);
-
-          if (file.type.startsWith('image/')) {
-            return (
-              <div key={index}>
-                <Image
-                  src={fileURL}
-                  alt={file.name}
-                  width={200}
-                  height={200}
-                  style={{ maxWidth: '200px', maxHeight: '200px' }}
-                />
-                <p>{file.name}</p>
-              </div>
-            );
-          } else if (file.type === 'application/pdf') {
-            return (
-              <div key={index} style={{ textAlign: 'center' }}>
-                <iframe
-                  src={fileURL}
-                  title={file.name}
-                  style={{ width: '200px', height: '200px', border: '1px solid #ccc' }}
-                />
-                <p>{file.name}</p>
-              </div>
-            );
-          } else {
-            return (
-              <div key={index}>
-                <p>Unsupported file type: {file.name}</p>
-              </div>
-            );
-          }
-        })}
-      </div>
-
-      {reportData && (
-        <div style={{ marginTop: '20px' }}>
-          <h2>Final Schema (DB Tables)</h2>
-          <pre style={{
-            background: '#272727',
-            color: '#fff',
-            padding: '10px',
-            whiteSpace: 'pre-wrap',
-            wordWrap: 'break-word'
-          }}>
-            {collapseSmallObjects(reportData.finalSchema, null, 2)}
-          </pre>
-
-          <hr />
-          <h3>LLM Parse Result (Raw)</h3>
-          <pre style={{
-            background: '#272727',
-            color: '#fff',
-            padding: '10px',
-            whiteSpace: 'pre-wrap',
-            wordWrap: 'break-word'
-          }}>
-            {collapseSmallObjects(reportData.parseResult, null, 2)}
-          </pre>
+      {reportData?.fileUrl && (
+        <div
+          style={{ position: "relative", width: "100%", maxWidth: "1000px" }}
+          className="border border-gray-600"
+        >
+          {/* The image */}
+          <img
+            src={reportData.fileUrl}
+            alt="Processed"
+            style={{ width: "100%", display: "block" }}
+            onLoad={handleImageLoad}
+          />
+          {/* The bounding box overlays */}
+          {renderAnnotations()}
+          {/* The tooltip */}
+          {renderTooltip()}
         </div>
       )}
     </div>
