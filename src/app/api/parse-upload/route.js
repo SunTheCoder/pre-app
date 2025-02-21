@@ -39,11 +39,16 @@ function transformToFinalSchema(parsedResult, fullText) {
   function findByFirstName(name) {
     const firstName = name.trim().toLowerCase();
     const candidates = [];
-    for (const person of peopleMap.values()) {
-      const candidateFirst = person.full_name.split(' ')[0].toLowerCase();
-      if (candidateFirst === firstName) {
-        candidates.push(person);
+    try {
+      for (const person of peopleMap.values()) {
+        const candidateFirst = person.full_name.split(' ')[0].toLowerCase();
+        if (candidateFirst === firstName) {
+          candidates.push(person);
+        }
       }
+    } catch (error) {
+      console.error('[SEMANTIC LOG] Error in parse-upload route:', error);
+      return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
     }
     return candidates.length === 1 ? candidates[0] : null;
   }
@@ -284,6 +289,9 @@ export async function POST(request) {
     const visionClient = new vision.ImageAnnotatorClient();
     const [result] = await visionClient.textDetection(tempFilePath);
     const extractedText = result.fullTextAnnotation?.text || '';
+    const annotations = result.textAnnotations || [];
+    const personAnnotations = annotations.slice(1); // You might apply further filtering here if needed
+
     console.log(`[SEMANTIC LOG] OCR complete. Extracted text length: ${extractedText.length}`);
 
     // 4. Clean up temp file.
@@ -329,7 +337,7 @@ Output only the JSON as specified, with no extra commentary.
     console.log('[SEMANTIC LOG] Sending first parse prompt to OpenAI, length:', parsePrompt.length);
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const parseResponse = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
+      model: 'gpt-4o-mini',
       messages: [
         { role: 'system', content: 'You are an expert data parser.' },
         { role: 'user', content: parsePrompt },
@@ -371,14 +379,44 @@ Output only the JSON as specified, with no extra commentary.
     console.log('[SEMANTIC LOG] Transforming merged parse result into final schema...');
     const finalSchema = transformToFinalSchema(parseResult, extractedText);
 
+    // 7. Cross-reference personAnnotations with finalSchema.people, but only keep one annotation per person.
+    const annotatedPeopleMap = new Map(); // maps person_id -> annotation object
+
+    for (const anno of personAnnotations) {
+      const detectedText = anno.description ? anno.description.trim().toLowerCase() : "";
+      // Attempt to match against finalSchema.people
+      const match = finalSchema.people.find(person =>
+        person.full_name.trim().toLowerCase().includes(detectedText)
+      );
+
+      if (match) {
+        // If we haven't already assigned an annotation to this person, store it.
+        if (!annotatedPeopleMap.has(match.person_id)) {
+          annotatedPeopleMap.set(match.person_id, {
+            person_id: match.person_id,
+            vertices: anno.boundingPoly.vertices
+          });
+        }
+        // Otherwise, skip (we do nothing) because we already have an annotation for that person.
+      }
+    }
+
+    // Now convert annotatedPeopleMap to an array
+    const annotatedPeople = Array.from(annotatedPeopleMap.values());
+
+    console.log('[SEMANTIC LOG] Single annotation per person. Count:', annotatedPeople.length);
+    console.log(JSON.stringify(annotatedPeople, null, 2));
+
+    // 8. Return final result including finalSchema, parseResult, and annotated person data.
     console.log('[SEMANTIC LOG] Returning final schema to client.');
     return NextResponse.json({
       finalSchema,
-      parseResult
+      parseResult,
+      personAnnotations: annotatedPeople
     });
-
-  } catch (error) {
-    console.error('[SEMANTIC LOG] Server Error:', error);
-    return NextResponse.json({ error: 'Failed to process the upload.', details: String(error) }, { status: 500 });
+  }
+  catch (error) {
+    console.error('[SEMANTIC LOG] Error in parse-upload route:', error);
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
